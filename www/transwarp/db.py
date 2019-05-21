@@ -1,7 +1,7 @@
-#!/usr /bin python
+#!/usr/bin python
 # -*- coding: utf-8 -*-
 import time, uuid, functools, threading, logging
-#Dict object:
+# Dict object:
 
 
 class Dict(dict):
@@ -28,14 +28,14 @@ def _profiling(start, sql=''):
     if t > 0.1:
         logging.warning('[PROFILING] [DB] %s: %s' % (t, sql))
     else:
-         logging.info('[PROFILING] [DB] %S: %s' % (t, sql))
+        logging.info('[PROFILING] [DB] %s: %s' % (t, sql))
 
 
 class DBError(Exception):
     pass
 
 
-class MultiColumnsErrors(DBError):
+class MultiColumnsError(DBError):
     pass
 
 
@@ -129,10 +129,12 @@ class _ConnectionCtx(object):
         if self.should_cleanup:
             _db_ctx.cleanup()
 
-    def connection():
+
+def connection():
         return _ConnectionCtx()
 
-    def with_connection(func):
+
+def with_connection(func):
         @functools.wraps(func)
         def _wrapper(*args, ** kw):
             with _ConnectionCtx():
@@ -164,7 +166,7 @@ class _TransactionCtx(object):
             if self.should_close_conn:
                 _db_ctx.cleanup()
 
-    def commit(selfself):
+    def commit(self):
         global _db_ctx
         logging.info('commit transaction..')
         try:
@@ -182,17 +184,94 @@ class _TransactionCtx(object):
         _db_ctx.connection.rollback()
         logging.info('rollback ok.')
 
-    def transaction(self):
-        return _TransactionCtx()
 
-    def with_transaction(func):
-        @functools.wraps(func)
-        def _wrapper(*args, **kw):
-            _start = time.time()
-            with _TransactionCtx():
-                return func(*args, **kw)
-            _profiling(_start)
-        return _wrapper
+def transaction(self):
+    return _TransactionCtx()
 
-    
 
+def with_transaction(func):
+    @functools.wraps(func)
+    def _wrapper(*args, **kw):
+        _start = time.time()
+        with _TransactionCtx():
+            return func(*args, **kw)
+        _profiling(_start)
+    return _wrapper
+
+
+def _select(sql, first, *args):
+    global _db_ctx
+    cursor = None
+    sql = sql.replace('?', '%s')
+    logging .info('SQL: %s, ARGS: %s' % (sql, args))
+    try:
+        cursor = _db_ctx.connection.cursor()
+        cursor.execute(sql, args)
+        if cursor.description:
+            names = [x[0] for x in cursor.description]
+        if first:
+            values = cursor.fetchone()
+            if not values:
+                return None
+            return Dict(names, values)
+        return [Dict[names, x] for x in cursor.fetchall()]
+    finally:
+        if cursor:
+            cursor.close()
+
+
+@with_connection
+def select_one(sql, *args):
+    return _select(sql, True, *args)
+
+
+@with_connection
+def select_int(sql, *args):
+    d = _select(sql, True, *args)
+    if len(d) != 1:
+        raise MultiColumnsError('Expect only one column.')
+    return d.values()[0]
+
+
+@with_connection
+def select(sql, *args):
+    return _select(sql, False, *args)
+
+
+@with_connection
+def _update(sql, *args):
+    global _db_ctx
+    cursor = None
+    sql = sql.replace('?', '%s')
+    logging.info('SQL: %s, ARGS: %s' % (sql, args))
+    try:
+        cursor = _db_ctx.connection.cursor()
+        cursor.execute(sql, args)
+        r = cursor.rowcount
+        if _db_ctx.transactions==0:
+            logging.info('auto commit')
+            _db_ctx.connection.commit()
+        return r
+    finally:
+        if cursor:
+            cursor.close()
+
+
+def insert(table, **kw):
+    cols, args = zip(*kw.iteritems())
+    sql = 'insert into `%s` (%s) values (%s)' % (table, ','.join(['`%s`' % col for col in cols]), ','.join(['?' for i
+                                                                                                in range(len(cols))]))
+    return _update(sql, *args)
+
+
+def update(sql, *args):
+    return _update(sql, *args)
+
+
+if __name__ == '__main__':
+    logging.basicConifg(level=logging.DEBUG)
+    create_engine('www-data', 'www-data', 'test')
+    update('drop tables if exists user')
+    update('create tables user (id int primary key, name text, email text, passwd text, last_modified real)')
+    import doctest
+    doctest.testmod()
